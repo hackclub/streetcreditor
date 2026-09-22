@@ -12,12 +12,25 @@ puts "  #{writers.size} writer tokens, #{readers.size} reader tokens"
 config = Pipeline.load_config
 puts "  #{config[:aliases].size} email aliases, #{config[:overrides].size} manual overrides"
 
-puts "loading all approved projects..."
-projects = ApprovedProject.all.to_a
-puts "  #{projects.size} projects loaded"
+puts "loading approved projects (streaming)..."
+latest = {}
+count = 0
+ApprovedProject.all.each do |project|
+  email = Pipeline.canonicalize(project.email_normalized || project.email, config[:aliases])
+  next unless email && !email.empty?
+  date = project.approved_at
+  next unless date
+  latest[email] = date if !latest[email] || date > latest[email]
+  count += 1
+  print "  #{count} projects...\r" if count % 100 == 0
+end
 
-latest = Pipeline.aggregate_ships(projects, config)
-puts "  #{latest.size} unique shippers"
+config[:overrides].each do |email, date|
+  next unless email && date
+  latest[email] = date if !latest[email] || date > latest[email]
+end
+
+puts "  #{count} projects -> #{latest.size} unique shippers"
 
 changes = Pipeline.diff(latest, state)
 puts "  #{changes.size} profiles to update"
