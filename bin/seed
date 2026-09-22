@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+require_relative "../boot"
+
+state = SyncState.new
+writers = TokenPool.new(prefix: "SLACK_WRITER_TOKEN", rate: 30)
+readers = TokenPool.new(prefix: "SLACK_READER_TOKEN", rate: 50)
+
+puts "streetcreditor seed"
+puts "  #{writers.size} writer tokens, #{readers.size} reader tokens"
+
+config = Pipeline.load_config
+puts "  #{config[:aliases].size} email aliases, #{config[:overrides].size} manual overrides"
+
+puts "loading all approved projects..."
+projects = ApprovedProject.all.to_a
+puts "  #{projects.size} projects loaded"
+
+latest = Pipeline.aggregate_ships(projects, config)
+puts "  #{latest.size} unique shippers"
+
+changes = Pipeline.diff(latest, state)
+puts "  #{changes.size} profiles to update"
+
+Pipeline.resolve_slack_ids!(changes, readers, state)
+puts "  #{changes.size} resolved to Slack users"
+
+result = Pipeline.push_to_slack!(changes, writers, state)
+state.touch_sweep!
+
+puts "done! #{result[:success]} updated, #{result[:errors]} errors"

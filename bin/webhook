@@ -1,0 +1,87 @@
+#!/usr/bin/env ruby
+# manage the airtable webhook that feeds webhook.rb
+#
+#   bin/webhook list
+#   bin/webhook create https://your.host/airtable/webhook
+#   bin/webhook create-overrides https://your.host/airtable/webhook
+#   bin/webhook delete achXXXXXXXXXXXXXX
+#   bin/webhook refresh achXXXXXXXXXXXXXX
+require_relative "../boot"
+
+BASES = {
+  ships: ENV.fetch("SHIPS_BASE_KEY"),
+  config: ENV.fetch("CONFIG_BASE_KEY")
+}
+
+def show(w)
+  puts "  #{w['id']}  #{w['isHookEnabled'] ? 'enabled ' : 'DISABLED'}  expires #{w['expirationTime'] || 'never'}"
+  puts "      -> #{w['notificationUrl']}"
+  puts "      cursor for next payload: #{w['cursorForNextPayload']}" if w["cursorForNextPayload"]
+  if (err = w.dig("lastNotificationResult", "error"))
+    puts "      last notification error: #{err.inspect}"
+  end
+end
+
+def find_base_for(webhook_id)
+  BASES.each_value do |base_id|
+    AirtableWebhooks.list(base_id).each do |w|
+      return base_id if w["id"] == webhook_id
+    end
+  end
+  abort "webhook #{webhook_id} not found on any known base"
+end
+
+case ARGV
+in ["list"]
+  BASES.each do |label, base_id|
+    hooks = AirtableWebhooks.list(base_id)
+    puts hooks.empty? ? "no webhooks on #{label} (#{base_id})" : "#{label} (#{base_id}):"
+    hooks.each { |w| show(w) }
+  end
+
+in ["create", url]
+  w = AirtableWebhooks.create(
+    BASES[:ships],
+    notification_url: url,
+    table_id: ApprovedProject::TABLE_ID,
+    watch_fields: [ApprovedProject::FIELD_EMAIL, ApprovedProject::FIELD_APPROVED_AT],
+    include_fields: [ApprovedProject::FIELD_EMAIL, ApprovedProject::FIELD_APPROVED_AT]
+  )
+  puts "created #{w['id']}, expires #{w['expirationTime']}"
+  puts
+  puts "add this to .env (it is only shown once):"
+  puts
+  puts "  AIRTABLE_WEBHOOK_MAC_SECRET=#{w['macSecretBase64']}"
+  puts
+  puts "then restart the server. it refreshes itself on ping and bin/sweep refreshes it daily."
+
+in ["create-overrides", url]
+  w = AirtableWebhooks.create(
+    BASES[:config],
+    notification_url: url,
+    table_id: ManualOverride::TABLE_ID,
+    watch_fields: [ManualOverride::FIELD_EMAIL, ManualOverride::FIELD_SHIP_DATE],
+    include_fields: [ManualOverride::FIELD_EMAIL, ManualOverride::FIELD_SHIP_DATE]
+  )
+  puts "created #{w['id']}, expires #{w['expirationTime']}"
+  puts
+  puts "add this to .env (it is only shown once):"
+  puts
+  puts "  AIRTABLE_WEBHOOK_MAC_SECRET_1=#{w['macSecretBase64']}"
+  puts
+  puts "then restart the server."
+
+in ["delete", id]
+  base_id = find_base_for(id)
+  AirtableWebhooks.delete(base_id, id)
+  puts "deleted #{id}"
+
+in ["refresh", id]
+  base_id = find_base_for(id)
+  expires = AirtableWebhooks.refresh(base_id, id)
+  puts expires ? "#{id} now expires #{expires}" : "refresh failed"
+
+else
+  puts File.read(__FILE__).lines.grep(/^#   /).map { |l| l.sub("#   ", "  ") }
+  exit 1
+end

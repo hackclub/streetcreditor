@@ -1,0 +1,61 @@
+#!/usr/bin/env ruby
+require_relative "../boot"
+
+state = SyncState.new
+writers = TokenPool.new(prefix: "SLACK_WRITER_TOKEN", rate: 30)
+readers = TokenPool.new(prefix: "SLACK_READER_TOKEN", rate: 50)
+
+puts "streetcreditor sweep"
+
+config = Pipeline.load_config
+
+if state.last_sweep_at
+  puts "  last sweep: #{state.last_sweep_at}"
+  puts "loading new projects since last sweep..."
+  cutoff = (Date.parse(state.last_sweep_at) - 1).to_s
+  projects = ApprovedProject.where("IS_AFTER({Approved At}, '#{cutoff}')").to_a
+  puts "  #{projects.size} new projects"
+
+  # always aggregate, even with zero projects: overrides live in config
+  # and a manual ship on a quiet day still needs to go out
+  latest = Pipeline.aggregate_ships(projects, config)
+  new_changes = Pipeline.diff(latest, state)
+  Pipeline.resolve_slack_ids!(new_changes, readers, state)
+  puts "  #{new_changes.size} new shippers to update"
+else
+  puts "  no previous sweep — run bin/seed first"
+  new_changes = []
+end
+
+puts "refreshing relative time strings..."
+alt_changes = Pipeline.refresh_alt_strings(state)
+puts "  #{alt_changes.size} profiles need alt text refresh"
+
+seen = new_changes.map { |c| c[:email] }.to_set
+alt_changes.reject! { |c| seen.include?(c[:email]) }
+
+all_changes = new_changes + alt_changes
+puts "  #{all_changes.size} total updates"
+
+if all_changes.any?
+  result = Pipeline.push_to_slack!(all_changes, writers, state)
+  puts "  #{result[:success]} updated, #{result[:errors]} errors"
+end
+
+state.touch_sweep!
+
+# webhooks made with a PAT die after 7 days unless refreshed. the server refreshes
+# on ping, but a quiet week would kill it, so belt-and-braces here too.
+webhooks = state.known_webhooks
+if webhooks.any?
+  puts "refreshing #{webhooks.size} airtable webhook(s)..."
+  webhooks.each do |webhook_id, base_id|
+    expires = AirtableWebhooks.refresh(base_id, webhook_id)
+    if expires
+      state.touch_webhook_refresh!(webhook_id)
+      puts "  #{webhook_id} expires #{expires}"
+    end
+  end
+end
+
+puts "done!"
