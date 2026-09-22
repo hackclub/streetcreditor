@@ -20,7 +20,13 @@ class StreetCreditorWebhook < Sinatra::Base
     set :readers, TokenPool.new(prefix: "SLACK_READER_TOKEN", rate: 50)
     set :config_cache, Pipeline.load_config
     set :config_loaded_at, Time.now
-    set :mac_secrets, load_mac_secrets
+    secrets = [ENV["AIRTABLE_WEBHOOK_MAC_SECRET"]].compact
+    i = 1
+    while (val = ENV["AIRTABLE_WEBHOOK_MAC_SECRET_#{i}"])
+      secrets << val
+      i += 1
+    end
+    set :mac_secrets, secrets
 
     if settings.mac_secrets.empty?
       $stderr.puts "webhook: no AIRTABLE_WEBHOOK_MAC_SECRET* set — accepting unsigned pings"
@@ -182,19 +188,6 @@ class StreetCreditorWebhook < Sinatra::Base
   end
 
   class << self
-    def load_mac_secrets
-      secrets = []
-      secrets << ENV["AIRTABLE_WEBHOOK_MAC_SECRET"] if ENV["AIRTABLE_WEBHOOK_MAC_SECRET"]
-      i = 1
-      loop do
-        val = ENV["AIRTABLE_WEBHOOK_MAC_SECRET_#{i}"]
-        break unless val
-        secrets << val
-        i += 1
-      end
-      secrets
-    end
-
     def drain((base_id, webhook_id))
       refresh_config_if_stale!
       process_webhook(base_id, webhook_id)
