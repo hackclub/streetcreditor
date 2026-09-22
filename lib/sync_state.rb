@@ -2,7 +2,7 @@ require "sqlite3"
 require "time"
 
 class SyncState
-  DEFAULT_PATH = File.expand_path("../sync_state.db", __dir__)
+  DEFAULT_PATH = ENV.fetch("SYNC_STATE_PATH", File.expand_path("../sync_state.db", __dir__))
 
   def initialize(path = DEFAULT_PATH)
     @db = SQLite3::Database.new(path)
