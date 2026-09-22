@@ -15,6 +15,7 @@ class StreetCreditorWebhook < Sinatra::Base
   REFRESH_EVERY = 24 * 60 * 60
 
   configure do
+    set :host_authorization, permitted_hosts: [/.*/]
     set :state, SyncState.new
     set :writers, TokenPool.new(prefix: "SLACK_WRITER_TOKEN", rate: 30)
     set :readers, TokenPool.new(prefix: "SLACK_READER_TOKEN", rate: 50)
