@@ -11,6 +11,9 @@ class StreetCreditorWebhook < Sinatra::Base
   OVERRIDE_TABLE_ID = ManualOverride::TABLE_ID
   OVERRIDE_FIELD_EMAIL = ManualOverride::FIELD_EMAIL
   OVERRIDE_FIELD_SHIP_DATE = ManualOverride::FIELD_SHIP_DATE
+  ALIAS_TABLE_ID = EmailAlias::TABLE_ID
+  ALIAS_FIELD_PRIMARY = EmailAlias::FIELD_PRIMARY
+  ALIAS_FIELD_ALIAS = EmailAlias::FIELD_ALIAS
   CONFIG_TTL = 300
   REFRESH_EVERY = 24 * 60 * 60
 
@@ -230,6 +233,7 @@ class StreetCreditorWebhook < Sinatra::Base
       state = settings.state
       ships = {}
       overrides = {}
+      aliased_primaries = Set.new
 
       next_cursor = AirtableWebhooks.each_payload(base_id, webhook_id, cursor: state.webhook_cursor(webhook_id)) do |p|
         changed = p["changedTablesById"] || {}
@@ -251,7 +255,24 @@ class StreetCreditorWebhook < Sinatra::Base
             collect_override(overrides, id, record.dig("current", "cellValuesByFieldId"))
           end
         end
+
+        if (alias_changes = changed[ALIAS_TABLE_ID])
+          (alias_changes["createdRecordsById"] || {}).each do |id, record|
+            collect_alias(aliased_primaries, id, record["cellValuesByFieldId"])
+          end
+          (alias_changes["changedRecordsById"] || {}).each do |id, record|
+            collect_alias(aliased_primaries, id, record.dig("current", "cellValuesByFieldId"))
+          end
+        end
       end
+
+      # alias/override edits change the config map; reload before we act on it so
+      # canonicalization and re-aggregation see the new mapping.
+      if !overrides.empty? || !aliased_primaries.empty?
+        settings.config_cache = Pipeline.load_config
+        settings.config_loaded_at = Time.now
+      end
+      config = settings.config_cache
 
       ships.merge(overrides).each do |email, ship_date|
         Pipeline.update_single(
@@ -260,15 +281,19 @@ class StreetCreditorWebhook < Sinatra::Base
           writers: settings.writers,
           readers: settings.readers,
           state: state,
-          config: settings.config_cache
+          config: config
         )
       rescue => e
         $stderr.puts "webhook: error updating #{email}: #{e.message}"
       end
 
-      unless overrides.empty?
-        settings.config_cache = Pipeline.load_config
-        settings.config_loaded_at = Time.now
+      # a new/changed alias means past ships under the alias should roll up to the
+      # primary. re-aggregate every email mapping to the primary and write the
+      # latest ship date to the primary's account.
+      aliased_primaries.each do |primary|
+        reaggregate_primary(primary, state, config)
+      rescue => e
+        $stderr.puts "webhook: error re-aggregating alias primary #{primary}: #{e.message}"
       end
 
       state.set_webhook_cursor(webhook_id, base_id, next_cursor) if next_cursor
@@ -313,6 +338,48 @@ class StreetCreditorWebhook < Sinatra::Base
       overrides[email] = ship_date if !overrides[email] || ship_date > overrides[email]
     rescue => e
       $stderr.puts "webhook: couldn't resolve override #{record_id}: #{e.message}"
+    end
+
+    def collect_alias(primaries, record_id, fields)
+      fields ||= {}
+      return unless fields.key?(ALIAS_FIELD_PRIMARY) || fields.key?(ALIAS_FIELD_ALIAS)
+
+      primary = fields[ALIAS_FIELD_PRIMARY]
+      unless primary
+        record = EmailAlias.find(record_id)
+        primary = record.primary_email
+      end
+      return unless primary && !primary.to_s.strip.empty?
+
+      primaries << primary.downcase.strip
+    rescue => e
+      $stderr.puts "webhook: couldn't resolve alias #{record_id}: #{e.message}"
+    end
+
+    # find the latest approved ship date across the primary and every email that
+    # aliases to it, and write it to the primary's slack profile.
+    def reaggregate_primary(primary, state, config)
+      emails = [primary] + config[:aliases].select { |_a, p| p == primary }.keys
+      latest = nil
+      emails.uniq.each do |em|
+        esc = em.gsub("'", "\\\\'")
+        ApprovedProject.where(
+          "OR(LOWER({Email})='#{esc}', LOWER({Email - Trimmed & Lowercased})='#{esc}')"
+        ).each do |proj|
+          d = proj.approved_at
+          latest = d if d && (latest.nil? || d > latest)
+        end
+      end
+      return unless latest
+
+      Pipeline.update_single(
+        email: primary,
+        ship_date: latest,
+        writers: settings.writers,
+        readers: settings.readers,
+        state: state,
+        config: config
+      )
     end
 
     def refresh_if_due(base_id, webhook_id)

@@ -4,6 +4,7 @@
 #   bin/webhook list
 #   bin/webhook create https://your.host/airtable/webhook
 #   bin/webhook create-overrides https://your.host/airtable/webhook
+#   bin/webhook create-aliases https://your.host/airtable/webhook
 #   bin/webhook delete achXXXXXXXXXXXXXX
 #   bin/webhook refresh achXXXXXXXXXXXXXX
 require_relative "../boot"
@@ -68,6 +69,22 @@ in ["create-overrides", url]
   puts "add this to .env (it is only shown once):"
   puts
   puts "  AIRTABLE_WEBHOOK_MAC_SECRET_1=#{w['macSecretBase64']}"
+  puts
+  puts "then restart the server."
+
+in ["create-aliases", url]
+  w = AirtableWebhooks.create(
+    BASES[:config],
+    notification_url: url,
+    table_id: EmailAlias::TABLE_ID,
+    watch_fields: [EmailAlias::FIELD_PRIMARY, EmailAlias::FIELD_ALIAS],
+    include_fields: [EmailAlias::FIELD_PRIMARY, EmailAlias::FIELD_ALIAS]
+  )
+  puts "created #{w['id']}, expires #{w['expirationTime']}"
+  puts
+  puts "add this to .env (it is only shown once):"
+  puts
+  puts "  AIRTABLE_WEBHOOK_MAC_SECRET_2=#{w['macSecretBase64']}"
   puts
   puts "then restart the server."
 
