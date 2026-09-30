@@ -16,8 +16,8 @@ class StreetCreditorWebhook < Sinatra::Base
 
   configure do
     set :state, SyncState.new
-    set :writers, TokenPool.new(prefix: "SLACK_WRITER_TOKEN", rate: 30)
-    set :readers, TokenPool.new(prefix: "SLACK_READER_TOKEN", rate: 50)
+    set :writers, TokenPool.new(prefix: "SLACK_WRITER_TOKEN", rate: 45)
+    set :readers, TokenPool.new(prefix: "SLACK_READER_TOKEN", rate: 45)
     set :config_cache, Pipeline.load_config
     set :config_loaded_at, Time.now
     secrets = [ENV["AIRTABLE_WEBHOOK_MAC_SECRET"]].compact
@@ -38,6 +38,26 @@ class StreetCreditorWebhook < Sinatra::Base
     set :pending, Set.new
     set :pending_lock, Mutex.new
     set :worker, Thread.new { loop { drain(settings.queue.pop) } }
+
+    # daily incremental sync, run in-process because this pod has the /data
+    # volume mounted (an orchard job pod does not, which is why the scheduled
+    # job failed every morning). checks hourly, runs once a day has passed.
+    set :sweeper, Thread.new {
+      loop do
+        sleep 3600
+        begin
+          last = settings.state.last_sweep_at
+          due = last.nil? || (Time.now - Time.parse(last)) > 20 * 3600
+          next unless due
+          Sweep.run(
+            state: settings.state, writers: settings.writers,
+            readers: settings.readers, log: ->(m) { $stderr.puts m }
+          )
+        rescue => e
+          $stderr.puts "sweeper: #{e.class}: #{e.message}"
+        end
+      end
+    }
   end
 
   get "/" do
