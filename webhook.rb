@@ -66,53 +66,22 @@ class StreetCreditorWebhook < Sinatra::Base
   get "/" do
     content_type "text/html"
     stats = settings.state.stats
-    config = settings.config_cache
     recent = settings.state.recent_shippers(50)
     alive = settings.worker.alive?
     qsize = settings.queue.size
 
-    wh_info = settings.state.known_webhooks.map { |wh_id, base_id|
-      [wh_id, base_id, settings.state.webhook_cursor(wh_id),
-       settings.state.webhook_refreshed_at(wh_id)]
-    }
-
-    if wh_info.empty?
-      wh_section = "<i>None registered.</i> Run <tt>bin/webhook create &lt;url&gt;</tt>"
-    else
-      wh_rows = wh_info.map { |id, base, cur, ref|
-        "<tr><td><tt>#{h id}</tt></td><td><tt>#{h base}</tt></td>" \
-        "<td align=right>#{cur || '&mdash;'}</td>" \
-        "<td>#{ref ? h(ref) : '<i>never</i>'}</td></tr>"
-      }.join
-      wh_section = "<table border=1 cellpadding=4 cellspacing=0>" \
-        "<tr bgcolor=#cccccc><th>Webhook</th><th>Base</th><th>Cursor</th><th>Last Refresh</th></tr>" \
-        "#{wh_rows}</table>"
-    end
-
-    if config[:overrides].empty?
-      override_section = ""
-    else
-      rows = config[:overrides].sort_by { |_, d| d.to_s }.reverse.map { |email, date|
-        alt = RelativeTime.call(date) rescue "?"
-        "<tr><td>#{redact_email email}</td><td>#{h date}</td><td><i>#{h alt}</i></td></tr>"
-      }.join
-      override_section = "<br><table border=1 cellpadding=3 cellspacing=0>" \
-        "<tr bgcolor=#cccccc><th>Email</th><th>Ship Date</th><th></th></tr>" \
-        "#{rows}</table>"
-    end
-
+    # public dashboard: aggregate stats + anonymized activity only. deliberately
+    # no emails, slack ids, overrides, base ids, or webhook internals.
     if recent.empty?
-      shipper_section = "<i>No shippers yet.</i> Run <tt>bin/seed</tt> first."
+      recent_section = "<i>No updates yet.</i>"
     else
       rows = recent.each_with_index.map { |row, i|
         bg = i.even? ? " bgcolor=#f0f0f0" : ""
-        "<tr#{bg}><td>#{redact_email row['email']}</td><td>#{h row['ship_date']}</td>" \
-        "<td>#{h row['alt']}</td><td><tt>#{redact_slack_id row['slack_id']}</tt></td>" \
+        "<tr#{bg}><td>#{h row['ship_date']}</td><td>#{h row['alt']}</td>" \
         "<td><font size=-1>#{h row['synced_at']}</font></td></tr>"
       }.join
-      shipper_section = "<table border=1 cellpadding=3 cellspacing=0 width=100%>" \
-        "<tr bgcolor=#cccccc><th>Email</th><th>Ship Date</th><th>Status</th><th>Slack</th><th>Synced</th></tr>" \
-        "#{rows}</table>"
+      recent_section = "<table border=1 cellpadding=3 cellspacing=0>" \
+        "<tr bgcolor=#cccccc><th>Ship Date</th><th>When</th><th>Synced</th></tr>#{rows}</table>"
     end
 
     status_bg = alive ? "#00cc00" : "#cc0000"
@@ -138,17 +107,9 @@ class StreetCreditorWebhook < Sinatra::Base
       <tr><td><b>Queue:</b></td><td#{queue_attr}>#{qsize}</td></tr>
       </table>
       <hr noshade size=1>
-      <h3>Webhooks</h3>
-      #{wh_section}
-      <hr noshade size=1>
-      <h3>Configuration</h3>
-      <p>#{config[:aliases].size} email aliases, #{config[:overrides].size} manual overrides
-      &mdash; <a href="https://airtable.com/#{h ENV['CONFIG_BASE_KEY']}">edit in airtable</a></p>
-      #{override_section}
-      <hr noshade size=1>
-      <h3>Recent Updates</h3>
-      <font size=-1>#{recent.size} of #{stats[:total]}</font><br>
-      #{shipper_section}
+      <h3>Recent Ship Dates</h3>
+      <font size=-1>latest #{recent.size} of #{stats[:total]}</font><br>
+      #{recent_section}
       <hr noshade size=1>
       <font size=-2 color=#888888>streetcreditor &bull; <a href="/health">json</a></font>
       </body></html>
