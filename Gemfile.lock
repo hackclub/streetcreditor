@@ -98,7 +98,8 @@ GEM
       gli
       hashie
       logger
-    sqlite3 (2.9.6-arm64-darwin)
+    sqlite3 (2.10.2-arm64-darwin)
+    sqlite3 (2.10.2-x86_64-linux-gnu)
     tilt (2.9.0)
     tzinfo (2.0.6)
       concurrent-ruby (~> 1.0)
@@ -106,6 +107,7 @@ GEM
 
 PLATFORMS
   arm64-darwin-23
+  x86_64-linux
 
 DEPENDENCIES
   airctiverecord!
